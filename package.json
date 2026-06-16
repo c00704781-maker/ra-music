@@ -1,0 +1,16 @@
+{
+  "name": "come-music-bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@discordjs/opus": "latest",
+    "@discordjs/voice": "latest",
+    "discord.js": "latest",
+    "ffmpeg-static": "latest",
+    "youtube-dl-exec": "latest"
+  }
+}
