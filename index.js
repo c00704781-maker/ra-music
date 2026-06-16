@@ -8,10 +8,8 @@ const {
   createAudioPlayer,
   createAudioResource,
   AudioPlayerStatus,
-  NoSubscriberBehavior,
   entersState,
-  VoiceConnectionStatus,
-  getVoiceConnection
+  VoiceConnectionStatus
 } = require("@discordjs/voice");
 
 const play = require("play-dl");
@@ -33,43 +31,45 @@ const queues = new Map();
 function getQueue(guildId) {
   if (!queues.has(guildId)) {
 
-    const player = createAudioPlayer({
-      behaviors: {
-        noSubscriber: NoSubscriberBehavior.Pause
-      }
-    });
+    const player = createAudioPlayer();
 
-    const queue = {
+    queues.set(guildId, {
       player,
       connection: null,
       songs: [],
       current: null,
       playing: false
-    };
-
-    player.on(AudioPlayerStatus.Idle, () => {
-      playNext(guildId);
     });
 
-    queues.set(guildId, queue);
+    player.on(AudioPlayerStatus.Idle, () => {
+      const q = queues.get(guildId);
+
+      q.playing = false;
+
+      if (q.songs.length > 0) {
+        playSong(guildId);
+      }
+    });
+
+    player.on("error", console.error);
   }
 
   return queues.get(guildId);
 }
 
-async function playNext(guildId) {
+async function playSong(guildId) {
 
-  const queue = getQueue(guildId);
+  const q = getQueue(guildId);
 
-  if (!queue.songs.length) {
-    queue.playing = false;
-    queue.current = null;
+  if (!q.songs.length) {
+    q.playing = false;
+    q.current = null;
     return;
   }
 
   try {
 
-    const song = queue.songs.shift();
+    const song = q.songs.shift();
 
     const stream = await play.stream(song.url);
 
@@ -80,39 +80,46 @@ async function playNext(guildId) {
       }
     );
 
-    queue.current = song;
-    queue.playing = true;
+    q.current = song;
+    q.playing = true;
 
-    queue.player.play(resource);
-    queue.connection.subscribe(queue.player);
+    q.player.play(resource);
 
-    console.log(`Now Playing: ${song.title}`);
+    q.connection.subscribe(q.player);
+
+    console.log("Playing:", song.title);
 
   } catch (err) {
-
-    console.error(err);
-
-    playNext(guildId);
+    console.error("PLAY ERROR:", err);
+    q.playing = false;
   }
 }
 
-client.once("ready", () => {
+client.once("clientReady", () => {
   console.log(`${client.user.tag} Online`);
 });
 
 client.on("messageCreate", async (message) => {
 
-  if (message.author.bot || !message.guild) return;
+  if (message.author.bot) return;
+  if (!message.guild) return;
+
+  console.log("MESSAGE:", message.content);
 
   const content = message.content.trim();
 
-  const guildId = message.guild.id;
+  const voiceChannel =
+    message.member.voice.channel;
 
-  const queue = getQueue(guildId);
+  const guildId =
+    message.guild.id;
 
-  const voiceChannel = message.member.voice.channel;
+  const q =
+    getQueue(guildId);
 
-  // 30come
+  if (content === "ping") {
+    return message.reply("pong");
+  }
 
   if (
     content.toLowerCase() ===
@@ -130,7 +137,7 @@ client.on("messageCreate", async (message) => {
       const connection =
         joinVoiceChannel({
           channelId: voiceChannel.id,
-          guildId: message.guild.id,
+          guildId: guildId,
           adapterCreator:
             message.guild.voiceAdapterCreator,
           selfDeaf: true
@@ -139,13 +146,13 @@ client.on("messageCreate", async (message) => {
       await entersState(
         connection,
         VoiceConnectionStatus.Ready,
-        30000
+        20000
       );
 
-      queue.connection = connection;
+      q.connection = connection;
 
       return message.reply(
-        `✅ دخلت روم ${voiceChannel.name}`
+        `✅ دخلت ${voiceChannel.name}`
       );
 
     } catch (err) {
@@ -158,11 +165,8 @@ client.on("messageCreate", async (message) => {
     }
   }
 
-  // ش / شغل
-
   if (
-    content.startsWith("ش ") ||
-    content.startsWith("شغل ")
+    content.startsWith("ش ")
   ) {
 
     if (!voiceChannel) {
@@ -171,78 +175,42 @@ client.on("messageCreate", async (message) => {
       );
     }
 
-    let query;
-
-    if (content.startsWith("شغل ")) {
-      query = content.slice(4).trim();
-    } else {
-      query = content.slice(2).trim();
-    }
-
-    if (!query) {
-      return message.reply(
-        "اكتب اسم الأغنية."
-      );
-    }
+    const query =
+      content.slice(2).trim();
 
     try {
 
-      if (!queue.connection) {
-
-        const connection =
-          joinVoiceChannel({
-            channelId: voiceChannel.id,
-            guildId: message.guild.id,
-            adapterCreator:
-              message.guild.voiceAdapterCreator,
-            selfDeaf: true
-          });
-
-        await entersState(
-          connection,
-          VoiceConnectionStatus.Ready,
-          30000
+      const results =
+        await play.search(
+          query,
+          { limit: 1 }
         );
 
-        queue.connection = connection;
-      }
-
-      const result =
-        await play.search(query, {
-          limit: 1
-        });
-
-      if (!result.length) {
+      if (!results.length) {
         return message.reply(
-          "لم يتم العثور على الأغنية."
+          "لم أجد الأغنية."
         );
       }
 
       const song = {
-        title: result[0].title,
-        url: result[0].url
+        title: results[0].title,
+        url: results[0].url
       };
 
-      queue.songs.push(song);
+      q.songs.push(song);
 
-      if (!queue.playing) {
+      if (!q.playing) {
 
         message.reply(
-`🎵 Playing song :
-${song.title}
-
-by : ${message.author.username}`
+          `🎵 Playing song:\n${song.title}`
         );
 
-        playNext(guildId);
+        playSong(guildId);
 
       } else {
 
         message.reply(
-`➕ Add song :
-${song.title}
-
-by : ${message.author.username}`
+          `➕ Add song:\n${song.title}`
         );
       }
 
@@ -251,60 +219,26 @@ by : ${message.author.username}`
       console.error(err);
 
       message.reply(
-        "❌ فشل تشغيل الأغنية."
+        "❌ فشل البحث."
       );
     }
   }
 
-  // س / سكب
+  if (content === "س") {
 
-  if (
-    content === "س" ||
-    content === "سكب"
-  ) {
-
-    if (!queue.current) {
+    if (!q.current) {
       return message.reply(
-        "لا يوجد شيء شغال."
+        "لا يوجد شيء يعمل."
       );
     }
 
-    const skipped =
-      queue.current.title;
-
-    queue.player.stop();
+    q.player.stop();
 
     return message.reply(
-`⏭️ Skipped :
-${skipped}
-
-by : ${message.author.username}`
+      `⏭️ Skipped:\n${q.current.title}`
     );
   }
 
-  // وقف
-
-  if (content === "وقف") {
-
-    queue.songs = [];
-    queue.current = null;
-    queue.playing = false;
-
-    queue.player.stop();
-
-    const connection =
-      getVoiceConnection(guildId);
-
-    if (connection) {
-      connection.destroy();
-    }
-
-    queues.delete(guildId);
-
-    return message.reply(
-      "🛑 تم إيقاف البوت."
-    );
-  }
 });
 
 client.login(TOKEN);
